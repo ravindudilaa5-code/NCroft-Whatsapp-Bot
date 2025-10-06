@@ -4,6 +4,7 @@ const qrcode = require('qrcode-terminal')
 const fs = require('fs')
 const askGemini = require('./gemini')
 const downloadYouTube = require('./youtube')
+const { searchYouTube } = require('./youtube')
 
 async function startBot() {
   const { state, saveCreds } = await useMultiFileAuthState('./auth_info_baileys')
@@ -58,6 +59,35 @@ async function startBot() {
 
       console.log(`💬 Message from ${sender}: ${userMessage}`);
 
+      // YouTube search command
+      if (userMessage.toLowerCase().startsWith('!ytsearch ')) {
+        const query = userMessage.slice(10).trim();
+        await sock.sendMessage(sender, { text: "🔍 Searching YouTube..." });
+        
+        try {
+          const results = await searchYouTube(query);
+          
+          if (results.length === 0) {
+            await sock.sendMessage(sender, { text: "❌ No results found." });
+            return;
+          }
+          
+          let resultText = `🎥 *Search Results for "${query}":*\n\n`;
+          results.forEach((video, index) => {
+            resultText += `${index + 1}. *${video.title}*\n`;
+            resultText += `   👤 ${video.author.name}\n`;
+            resultText += `   ⏱️ ${video.timestamp}\n`;
+            resultText += `   🔗 ${video.url}\n\n`;
+          });
+          
+          await sock.sendMessage(sender, { text: resultText });
+          console.log(`✅ Sent search results to ${sender}`);
+        } catch (error) {
+          await sock.sendMessage(sender, { text: "❌ Error searching YouTube." });
+        }
+        return;
+      }
+
       // YouTube download commands
       if (userMessage.toLowerCase().startsWith('!ytaudio ')) {
         const url = userMessage.slice(9).trim();
@@ -109,6 +139,7 @@ async function startBot() {
 
       if (userMessage.toLowerCase() === "help") {
         const helpText = `🤖 *Bot Commands:*\n\n` +
+          `• !ytsearch <query> - Search YouTube videos\n` +
           `• !ytaudio <url> - Download YouTube audio\n` +
           `• !ytvideo <url> - Download YouTube video\n` +
           `• hi - Say hello\n` +
