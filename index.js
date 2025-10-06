@@ -2,6 +2,8 @@ const { makeWASocket, useMultiFileAuthState } = require('@whiskeysockets/baileys
 const { Boom } = require('@hapi/boom')
 const qrcode = require('qrcode-terminal')
 const fs = require('fs')
+const askGemini = require('./gemini')
+const downloadYouTube = require('./youtube')
 
 async function startBot() {
   const { state, saveCreds } = await useMultiFileAuthState('./auth_info_baileys')
@@ -12,72 +14,119 @@ async function startBot() {
 
   sock.ev.on('creds.update', saveCreds)
 
-sock.ev.on('connection.update', (update) => {
-  const { connection, lastDisconnect, qr } = update
-  
-  if (qr) {
-    console.log('📱 Scan this QR code with your WhatsApp:')
-    qrcode.generate(qr, { small: true })
-  }
-  
-  if (connection === 'close') {
-    const shouldReconnect = (lastDisconnect?.error instanceof Boom) 
-      ? lastDisconnect?.error?.output?.statusCode !== 401 
-      : false
+  sock.ev.on('connection.update', (update) => {
+    const { connection, lastDisconnect, qr } = update
     
-    console.log('connection closed due to ', lastDisconnect?.error, ', reconnecting ', shouldReconnect)
+    if (qr) {
+      console.log('📱 Scan this QR code with your WhatsApp:')
+      qrcode.generate(qr, { small: true })
+    }
     
-    if (shouldReconnect) {
-      startBot()
+    if (connection === 'close') {
+      const shouldReconnect = (lastDisconnect?.error instanceof Boom) 
+        ? lastDisconnect?.error?.output?.statusCode !== 401 
+        : false
+      
+      console.log('connection closed due to ', lastDisconnect?.error, ', reconnecting ', shouldReconnect)
+      
+      if (shouldReconnect) {
+        startBot()
+      }
+    } else if (connection === 'open') {
+      console.log('✅ WhatsApp Connected!')
     }
-  } else if (connection === 'open') {
-    console.log('✅ WhatsApp Connected!')
-    // Send a message to a friend when connected
-    sendMessageToFriend('94763162359', 'hello dinidu komada  !');
-  }
-})
+  })
 
-sock.ev.on("messages.upsert", async ({ messages }) => {
-  const msg = messages[0]
-  const sender = msg.key.remoteJid
+  sock.ev.on("messages.upsert", async ({ messages }) => {
+    try {
+      const msg = messages[0];
+      
+      if (!msg.message || msg.key.remoteJid === 'status@broadcast') return;
+      if (msg.key.fromMe) return;
+      if (msg.key.remoteJid.endsWith('@g.us')) return;
+      
+      const sender = msg.key.remoteJid;
+      
+      let userMessage = '';
+      if (msg.message.conversation) {
+        userMessage = msg.message.conversation;
+      } else if (msg.message.extendedTextMessage) {
+        userMessage = msg.message.extendedTextMessage.text;
+      } else {
+        return;
+      }
 
-  if (msg.message?.conversation === "hi") {
-    await sock.sendMessage(sender, { text: "👋 Hello! How can I help you?" })
-  }
-})
+      console.log(`💬 Message from ${sender}: ${userMessage}`);
 
-// Add this function to send messages to friends
-async function sendMessageToFriend(phoneNumber, message) {
-  // Special handling for Sri Lankan numbers
-  let formattedNumber = phoneNumber;
-  
-  // If it's a Sri Lankan number (starts with 94)
-  if (phoneNumber.startsWith('94')) {
-    // Make sure there's no leading zero after country code
-    const numberPart = phoneNumber.substring(2);
-    if (numberPart.startsWith('0')) {
-      formattedNumber = '94' + numberPart.substring(1);
+      // YouTube download commands
+      if (userMessage.toLowerCase().startsWith('!ytaudio ')) {
+        const url = userMessage.slice(9).trim();
+        await sock.sendMessage(sender, { text: "⏳ Downloading audio... Please wait." });
+        
+        try {
+          const result = await downloadYouTube(url, 'audio');
+          await sock.sendMessage(sender, { 
+            audio: { url: result.path },
+            mimetype: 'audio/mp4',
+            fileName: `${result.title}.mp3`
+          });
+          
+          // Delete file after sending
+          fs.unlinkSync(result.path);
+          console.log(`✅ Sent audio to ${sender}`);
+        } catch (error) {
+          await sock.sendMessage(sender, { text: "❌ Error downloading audio. Please check the URL." });
+        }
+        return;
+      }
+
+      if (userMessage.toLowerCase().startsWith('!ytvideo ')) {
+        const url = userMessage.slice(9).trim();
+        await sock.sendMessage(sender, { text: "⏳ Downloading video... Please wait." });
+        
+        try {
+          const result = await downloadYouTube(url, 'video');
+          await sock.sendMessage(sender, { 
+            video: { url: result.path },
+            caption: `🎬 ${result.title}`,
+            fileName: `${result.title}.mp4`
+          });
+          
+          // Delete file after sending
+          fs.unlinkSync(result.path);
+          console.log(`✅ Sent video to ${sender}`);
+        } catch (error) {
+          await sock.sendMessage(sender, { text: "❌ Error downloading video. Please check the URL." });
+        }
+        return;
+      }
+
+      // Simple command handling
+      if (userMessage.toLowerCase() === "hi") {
+        await sock.sendMessage(sender, { text: "👋 Hello! How can I help you?" });
+        return;
+      }
+
+      if (userMessage.toLowerCase() === "help") {
+        const helpText = `🤖 *Bot Commands:*\n\n` +
+          `• !ytaudio <url> - Download YouTube audio\n` +
+          `• !ytvideo <url> - Download YouTube video\n` +
+          `• hi - Say hello\n` +
+          `• help - Show this message\n\n` +
+          `Or just ask me anything!`;
+        await sock.sendMessage(sender, { text: helpText });
+        return;
+      }
+
+      // Get AI reply from Gemini
+      const aiReply = await askGemini(userMessage);
+      await sock.sendMessage(sender, { text: aiReply });
+      console.log(`🤖 Replied to ${sender} with AI response`);
+      
+    } catch (error) {
+      console.error('Error handling message:', error);
     }
-  }
-  
-  // Add WhatsApp suffix if not present
-  formattedNumber = formattedNumber.includes('@s.whatsapp.net') 
-    ? formattedNumber 
-    : `${formattedNumber}@s.whatsapp.net`;
-  
-  try {
-    await sock.sendMessage(formattedNumber, { text: message });
-    console.log(`Message sent to ${formattedNumber}`);
-    return true;
-  } catch (error) {
-    console.error(`Failed to send message: ${error}`);
-    return false;
-  }
-}
-
-// Example usage - uncomment to use
-// sendMessageToFriend('12345678901', 'Hey there! This is a test message from my WhatsApp bot.');
-
+  });
 }
 
 startBot().catch(console.error)
