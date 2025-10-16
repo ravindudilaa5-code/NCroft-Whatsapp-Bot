@@ -1,4 +1,4 @@
-const { makeWASocket, useMultiFileAuthState } = require('@whiskeysockets/baileys')
+const { makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion } = require('@whiskeysockets/baileys')
 const { Boom } = require('@hapi/boom')
 const qrcode = require('qrcode-terminal')
 const fs = require('fs')
@@ -8,9 +8,14 @@ const { searchYouTube } = require('./youtube')
 
 async function startBot() {
   const { state, saveCreds } = await useMultiFileAuthState('./auth_info_baileys')
+  const { version } = await fetchLatestBaileysVersion()
 
   const sock = makeWASocket({
-    auth: state
+    version,
+    auth: state,
+    browser: ['Ubuntu', 'Chrome', '20.0.04'],
+    syncFullHistory: false,
+    markOnlineOnConnect: true
   })
 
   sock.ev.on('creds.update', saveCreds)
@@ -31,7 +36,13 @@ async function startBot() {
       console.log('connection closed due to ', lastDisconnect?.error, ', reconnecting ', shouldReconnect)
       
       if (shouldReconnect) {
-        startBot()
+        // Add delay before reconnecting to avoid rate limiting
+        setTimeout(() => {
+          console.log('⏳ Reconnecting in 3 seconds...')
+          startBot()
+        }, 3000)
+      } else {
+        console.log('⚠️ Connection permanently closed. Please delete auth_info_baileys folder and restart.')
       }
     } else if (connection === 'open') {
       console.log('✅ WhatsApp Connected!')

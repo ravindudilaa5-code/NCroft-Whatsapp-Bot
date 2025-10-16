@@ -14,7 +14,7 @@
   "dependencies": {
     "@google/generative-ai": "^0.24.1",
     "@vreden/youtube_scraper": "^1.2.7",
-    "@whiskeysockets/baileys": "^6.7.18",
+    "@whiskeysockets/baileys": "^6.7.20",
     "api-dylux": "^1.7.9",
     "axios": "^1.12.2",
     "dotenv": "^17.2.2",
